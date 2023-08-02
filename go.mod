@@ -5,6 +5,7 @@ go 1.20
 require (
 	github.com/morphism-labs/morphism-bindings v0.0.0-20230706120507-6afb146c84ec
 	github.com/morphism-labs/node v0.0.0-20230719002715-34d8a4857795
+	github.com/prometheus/client_golang v1.14.0
 	github.com/scroll-tech/go-ethereum v1.11.4
 	github.com/stretchr/testify v1.8.2
 	github.com/tendermint/tendermint v0.35.9
@@ -69,7 +70,6 @@ require (
 	github.com/petermattis/goid v0.0.0-20180202154549-b0b1615b78e5 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/prometheus/client_golang v1.14.0 // indirect
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.39.0 // indirect
 	github.com/prometheus/procfs v0.9.0 // indirect
@@ -108,5 +108,5 @@ require (
 replace (
 	github.com/btcsuite/btcd => github.com/btcsuite/btcd v0.20.1-beta
 	github.com/scroll-tech/go-ethereum => github.com/morphism-labs/go-ethereum v1.10.14-0.20230726084755-52c72a4f0283
-	github.com/tendermint/tendermint => github.com/morphism-labs/tendermint v0.0.0-20230726065853-7ba73b496a72
+	github.com/tendermint/tendermint => github.com/morphism-labs/tendermint v0.0.0-20230802041301-5c3575958342
 )

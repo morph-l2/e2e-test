@@ -238,8 +238,8 @@ github.com/morphism-labs/morphism-bindings v0.0.0-20230706120507-6afb146c84ec h1
 github.com/morphism-labs/morphism-bindings v0.0.0-20230706120507-6afb146c84ec/go.mod h1:77nVD5zWAA9s2yR/YDLV2PNI/azK74x4MA7pFe3fU5c=
 github.com/morphism-labs/node v0.0.0-20230719002715-34d8a4857795 h1:lX03XWGInHWykBxInzXUml0uhvJZcAHV+yHlLApwY0g=
 github.com/morphism-labs/node v0.0.0-20230719002715-34d8a4857795/go.mod h1:fSnHnBRkmHOSKREl6Zjvi1WMhbgHKkkcE5o6W4mRdAg=
-github.com/morphism-labs/tendermint v0.0.0-20230726065853-7ba73b496a72 h1:duiqRM0ttfnWJLismmD7X0ZvH72OzNCKDB6WAZBepG8=
-github.com/morphism-labs/tendermint v0.0.0-20230726065853-7ba73b496a72/go.mod h1:zJcxhzs3kbX6xs90IBX1vIQy1KmSfm4MgNbv3Lt+Rns=
+github.com/morphism-labs/tendermint v0.0.0-20230802041301-5c3575958342 h1:wDZD/gEeNFRvz7CDXeN+SNz1jt72zgz897tmXTiYVmk=
+github.com/morphism-labs/tendermint v0.0.0-20230802041301-5c3575958342/go.mod h1:zJcxhzs3kbX6xs90IBX1vIQy1KmSfm4MgNbv3Lt+Rns=
 github.com/nxadm/tail v1.4.4 h1:DQuhQpB1tVlglWS2hLQ5OV6B5r8aGxSrPc5Qo6uTN78=
 github.com/nxadm/tail v1.4.4/go.mod h1:kenIhsEOeOJmVchQTgglprH7qJGnHDVpk1VPCcaMI8A=
 github.com/oklog/ulid v1.3.1/go.mod h1:CirwcVhetQ6Lv90oh/F+FBtV6XMibvdAFo93nm5qn4U=

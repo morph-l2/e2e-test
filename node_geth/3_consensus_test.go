@@ -3,10 +3,11 @@ package node_geth
 import (
 	"context"
 	"fmt"
-	"github.com/scroll-tech/go-ethereum/common"
 	"math/big"
 	"testing"
 	"time"
+
+	"github.com/scroll-tech/go-ethereum/common"
 
 	nodetypes "github.com/morphism-labs/node/core"
 	"github.com/morphism-labs/node/db"
@@ -90,10 +91,12 @@ func TestSingleTendermint_VerifyBLS(t *testing.T) {
 			return
 		}).
 		WithCustomFuncDeliverBlock(func(txs [][]byte, l2Config []byte, zkConfig []byte, validators []tdm.Address, blsSignatures [][]byte) (err error) {
-			for _, tx := range txs {
-				txsBatch = append(txsBatch, tx)
-			}
-			zkContext = append(zkContext, zkConfig...)
+
+			vc := nodetypes.Version1Converter{}
+			l2Msg, _, err := vc.Recover(zkConfig, l2Config, txs)
+			require.NoError(t, err)
+			fmt.Printf("============>block number: %d, zkConfig: %s \n", l2Msg.Number, hexutil.Encode(zkConfig))
+
 			if len(blsSignatures) > 0 && len(blsSignatures[0]) > 0 {
 				require.EqualValues(t, 1, len(blsSignatures))
 				require.EqualValues(t, 1, len(validators))
@@ -108,11 +111,14 @@ func TestSingleTendermint_VerifyBLS(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, valid)
 				close(stop)
+			} else {
+				txsBatch = append(txsBatch, txs...)
+				zkContext = append(zkContext, zkConfig...)
 			}
 			return node.DeliverBlock(txs, l2Config, zkConfig, validators, blsSignatures)
 		})
 	tendermint, err := NewTendermintNode(customNode, blsKey, func(config *config.Config) {
-		config.Consensus.BatchBlocksInterval = 2
+		config.Consensus.BatchBlocksInterval = 3
 	})
 	require.NoError(t, err)
 	require.NoError(t, tendermint.Start())
@@ -152,7 +158,7 @@ func TestSingleTendermint_BatchPoint(t *testing.T) {
 		customNode := NewCustomNode(node).WithCustomFuncDeliverBlock(func(txs [][]byte, l2Config []byte, zkConfig []byte, validators []tdm.Address, blsSignatures [][]byte) (err error) {
 			l2Data, _, err := converter.Recover(zkConfig, l2Config, txs)
 			require.NoError(t, err)
-			if l2Data.Number%uint64(configBatchBlocksInterval) == 0 {
+			if l2Data.Number > 1 && (l2Data.Number-1)%uint64(configBatchBlocksInterval) == 0 {
 				if !hasSig(blsSignatures) {
 					close(errChan)
 					require.FailNow(t, fmt.Sprintf("should has signature on the block number of %d, but not found", l2Data.Number))
@@ -161,7 +167,7 @@ func TestSingleTendermint_BatchPoint(t *testing.T) {
 				close(errChan)
 				require.FailNow(t, fmt.Sprintf("signature on the wrong point, current block number: %d", l2Data.Number))
 			}
-			if l2Data.Number/uint64(configBatchBlocksInterval) == 2 { // tested 2 batch point, stop testing
+			if (l2Data.Number-1)/uint64(configBatchBlocksInterval) == 2 { // tested 2 batch point, stop testing
 				close(stop)
 			}
 			return node.DeliverBlock(txs, l2Config, zkConfig, validators, blsSignatures)
@@ -208,9 +214,11 @@ func TestSingleTendermint_BatchPoint(t *testing.T) {
 			if batchNum == 2 {
 				close(stop)
 			}
+			thisBlockTxsContext := make([]byte, 0)
 			for _, tx := range txs {
-				txsContext = append(txsContext, tx...)
+				thisBlockTxsContext = append(thisBlockTxsContext, tx...)
 			}
+			txsContext = append(txsContext, thisBlockTxsContext...)
 			zkContext = append(zkContext, zkConfig...)
 			currentBytes := append(zkContext, txsContext...)
 			if len(currentBytes)+rootSize >= configBatchMaxBytes {
@@ -218,9 +226,9 @@ func TestSingleTendermint_BatchPoint(t *testing.T) {
 					close(errChan)
 					require.FailNow(t, "no signature found when bytes reached configBatchMaxBytes")
 				}
-				// clean the context
-				txsContext = make([]byte, 0)
-				zkContext = make([]byte, 0)
+				// clean the context, but keep this block data, which will be calculated in next round batch size
+				txsContext = thisBlockTxsContext
+				zkContext = zkConfig
 				batchNum++
 			} else if hasSig(blsSignatures) {
 				close(errChan)
