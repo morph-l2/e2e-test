@@ -170,13 +170,13 @@ func TestNodeGeth_FullBlock(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, syncerDB.WriteSyncedL1Messages([]types.L1Message{*l1Message}, 0))
 
-		totalSize := eth.NewTx(&l1Message.L1MessageTx).Size()
+		totalSize := eth.NewTx(&l1Message.L1MessageTx).Size() + common.HashLength
 		var l2TxCount int
 		for totalSize < common.StorageSize(maxTxPayloadBytesPerBlock) {
 			l2TxCount++
 			tx, err := SimpleTransfer(geth)
 			require.NoError(t, err)
-			totalSize += tx.Size()
+			totalSize += tx.Size() + common.HashLength
 		}
 		if totalSize == common.StorageSize(maxTxPayloadBytesPerBlock) {
 			l2TxCount++

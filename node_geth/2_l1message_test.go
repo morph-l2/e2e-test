@@ -5,10 +5,10 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/morphism-labs/e2e/node_geth/configs"
 	"github.com/morphism-labs/morphism-bindings/bindings"
 	nodetypes "github.com/morphism-labs/node/core"
 	"github.com/morphism-labs/node/db"
-	"github.com/morphism-labs/node/e2e/configs"
 	"github.com/morphism-labs/node/sync"
 	"github.com/morphism-labs/node/types"
 	"github.com/scroll-tech/go-ethereum/accounts/abi/bind"
