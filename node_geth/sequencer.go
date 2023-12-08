@@ -1,11 +1,12 @@
 package node_geth
 
 import (
+	"github.com/tendermint/tendermint/crypto"
 	"testing"
 	"time"
 
-	"github.com/morphism-labs/node/db"
-	"github.com/morphism-labs/node/sync"
+	"github.com/morph-l2/node/db"
+	"github.com/morph-l2/node/sync"
 	"github.com/scroll-tech/go-ethereum/eth/ethconfig"
 	"github.com/scroll-tech/go-ethereum/node"
 	"github.com/scroll-tech/go-ethereum/p2p"
@@ -14,13 +15,13 @@ import (
 	"github.com/tendermint/tendermint/l2node"
 )
 
-func NewGethAndNode(t *testing.T, syncerDB sync.Database, systemConfigOption Option, gethOption GethOption) (Geth, l2node.L2Node) {
+func NewGethAndNode(t *testing.T, syncerDB sync.Database, systemConfigOption Option, gethOption GethOption, tmPubKey crypto.PubKey) (Geth, l2node.L2Node) {
 	sysConfig := NewSystemConfig(t, systemConfigOption)
 	geth, err := NewGeth(sysConfig, gethOption)
 	require.NoError(t, err)
 	require.NoError(t, geth.Backend.StartMining(-1))
 
-	node, err := NewSequencerNode(geth, sync.NewFakeSyncer(syncerDB))
+	node, err := NewSequencerNode(geth, sync.NewFakeSyncer(syncerDB), tmPubKey)
 	require.NoError(t, err)
 
 	return geth, node
@@ -31,17 +32,21 @@ type GethAndNode struct {
 	Node l2node.L2Node
 }
 
-func NewMultipleGethNodes(t *testing.T, nodesNum int) ([]l2node.L2Node, []Geth) {
-	l2Nodes := make([]l2node.L2Node, nodesNum)
-	geths := make([]Geth, nodesNum)
-	for i := 0; i < nodesNum; i++ {
-		geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, func(_ *ethconfig.Config, n *node.Config) error {
+func NewMultipleGethNodes(t *testing.T, publicKeys []crypto.PubKey) ([]l2node.L2Node, []Geth) {
+	l2Nodes := make([]l2node.L2Node, len(publicKeys))
+	geths := make([]Geth, len(publicKeys))
+	for i := 0; i < len(publicKeys); i++ {
+		geth, node := NewGethAndNode(t, db.NewMemoryStore(), func(config *SystemConfig) error {
+			genesis, err := GenesisFromPath(FullGenesisPath)
+			config.Genesis = genesis
+			return err
+		}, func(_ *ethconfig.Config, n *node.Config) error {
 			n.P2P = p2p.Config{
 				ListenAddr: ":0",
 				MaxPeers:   10,
 			}
 			return nil
-		})
+		}, publicKeys[i])
 		geths[i] = geth
 		l2Nodes[i] = node
 	}
@@ -63,7 +68,7 @@ loop:
 		case <-peersEstablishTimeout.C:
 			require.FailNow(t, "timeout to connect to peers")
 		default:
-			if len(geth0.Node.Server().Peers()) == nodesNum-1 {
+			if len(geth0.Node.Server().Peers()) == len(publicKeys)-1 {
 				break loop
 			}
 		}

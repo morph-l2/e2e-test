@@ -3,9 +3,9 @@ package node_geth
 import (
 	"math/big"
 
-	"github.com/morphism-labs/e2e/node_geth/configs"
-	"github.com/morphism-labs/morphism-bindings/bindings"
-	"github.com/morphism-labs/node/types"
+	"github.com/morph-l2/bindings/bindings"
+	"github.com/morph-l2/e2e/node_geth/configs"
+	"github.com/morph-l2/node/types"
 	"github.com/scroll-tech/go-ethereum/common"
 	eth "github.com/scroll-tech/go-ethereum/core/types"
 )

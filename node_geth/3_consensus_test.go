@@ -3,17 +3,19 @@ package node_geth
 import (
 	"context"
 	"fmt"
+	"github.com/morph-l2/bindings/bindings"
+	"github.com/morph-l2/node/types"
+	"github.com/scroll-tech/go-ethereum/common"
+	eth "github.com/scroll-tech/go-ethereum/core/types"
+	"github.com/tendermint/tendermint/l2node"
+	"github.com/tendermint/tendermint/libs/rand"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"math/big"
 	"testing"
 	"time"
 
-	"github.com/scroll-tech/go-ethereum/common"
-
-	nodetypes "github.com/morphism-labs/node/core"
-	"github.com/morphism-labs/node/db"
+	"github.com/morph-l2/node/db"
 	"github.com/scroll-tech/go-ethereum/accounts/abi/bind"
-	"github.com/scroll-tech/go-ethereum/common/hexutil"
-	"github.com/scroll-tech/go-ethereum/crypto"
 	"github.com/stretchr/testify/require"
 	"github.com/tendermint/tendermint/blssignatures"
 	"github.com/tendermint/tendermint/config"
@@ -23,7 +25,7 @@ import (
 
 func TestSingleTendermint_BasicProduceBlocks(t *testing.T) {
 	t.Run("TestDefaultConfig", func(t *testing.T) {
-		geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil)
+		geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil, nil)
 		tendermint, err := NewDefaultTendermintNode(node)
 		require.NoError(t, err)
 		require.NoError(t, tendermint.Start())
@@ -48,7 +50,7 @@ func TestSingleTendermint_BasicProduceBlocks(t *testing.T) {
 	})
 
 	t.Run("TestDelayEmptyBlocks", func(t *testing.T) {
-		geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil)
+		geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil, nil)
 		tendermint, err := NewTendermintNode(node, nil, func(c *config.Config) {
 			c.Consensus.TimeoutCommit = time.Second
 			c.Consensus.CreateEmptyBlocks = true
@@ -72,54 +74,54 @@ func TestSingleTendermint_BasicProduceBlocks(t *testing.T) {
 		require.NotNil(t, receipt.BlockNumber, "has not been involved in block after (timeoutCommit + 1) sec passed")
 		require.EqualValues(t, 1, receipt.Status)
 	})
-
 }
 
 func TestSingleTendermint_VerifyBLS(t *testing.T) {
-	geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil)
+	geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil, nil)
 	blsKey := blssignatures.GenFileBLSKey()
 
-	txsBatch := make([][]byte, 0)
-	zkContext := make([]byte, 0)
 	stop := make(chan struct{})
-	var lastRoot []byte
+	var firstBatchHash []byte
 	customNode := NewCustomNode(node).
-		WithCustomRequestBlockData(func(height int64) (txs [][]byte, l2Config []byte, zkConfig, root []byte, err error) {
-			txs, l2Config, zkConfig, root, err = node.RequestBlockData(height)
-			fmt.Printf("height: %d, root: %s \n", height, hexutil.Encode(root))
-			lastRoot = root
+		WithCustomFuncDeliverBlock(func(txs [][]byte, blockMeta []byte, data l2node.ConsensusData) (*tmproto.BatchParams, [][]byte, error) {
+			nextParams, nextValidator, err := node.DeliverBlock(txs, blockMeta, data)
+			wrappedBlock := new(types.WrappedBlock)
+			err = wrappedBlock.UnmarshalBinary(blockMeta)
+			require.NoError(t, err)
+			// set batch blocksInterval for testing when it is the first block
+			if wrappedBlock.Number == 1 {
+				nextParams = &tmproto.BatchParams{
+					BlocksInterval: 1,
+				}
+			} else if wrappedBlock.Number == 2 {
+				require.True(t, len(data.BatchHash) > 0, "should have batchHash when block 2")
+				firstBatchHash = data.BatchHash
+			}
+			return nextParams, nextValidator, err
+		}).
+		WithCustomSealBatch(func() (batchHash []byte, batchHeader []byte, err error) {
+			batchHash, batchHeader, err = node.SealBatch()
 			return
 		}).
-		WithCustomFuncDeliverBlock(func(txs [][]byte, l2Config []byte, zkConfig []byte, validators []tdm.Address, blsSignatures [][]byte) (err error) {
-
-			vc := nodetypes.Version1Converter{}
-			l2Msg, _, err := vc.Recover(zkConfig, l2Config, txs)
+		WithCustomCommitBatch(func(currentBlockBytes []byte, currentTxs tdm.Txs, blsDatas []l2node.BlsData) error {
+			var curBlock = new(types.WrappedBlock)
+			err := curBlock.UnmarshalBinary(currentBlockBytes)
 			require.NoError(t, err)
-			fmt.Printf("============>block number: %d, zkConfig: %s \n", l2Msg.Number, hexutil.Encode(zkConfig))
-
-			if len(blsSignatures) > 0 && len(blsSignatures[0]) > 0 {
-				require.EqualValues(t, 1, len(blsSignatures))
-				require.EqualValues(t, 1, len(validators))
-				sig, err := blssignatures.SignatureFromBytes(blsSignatures[0])
+			if curBlock.Number == 2 {
+				require.EqualValues(t, 1, len(blsDatas))
+				sig, err := blssignatures.SignatureFromBytes(blsDatas[0].Signature)
 				require.NoError(t, err)
-				pk, err := blssignatures.PublicKeyFromBytes(blsKey.PubKey, false)
+				blsPk, err := blssignatures.PublicKeyFromBytes(blsKey.PubKey, true)
 				require.NoError(t, err)
-				encodedTxsContext, err := node.EncodeTxs(txsBatch)
-				require.NoError(t, err)
-
-				valid, err := blssignatures.VerifySignature(sig, crypto.Keccak256(append(append(zkContext, encodedTxsContext...), lastRoot...)), pk)
+				valid, err := blssignatures.VerifySignature(sig, firstBatchHash, blsPk)
 				require.NoError(t, err)
 				require.True(t, valid)
 				close(stop)
-			} else {
-				txsBatch = append(txsBatch, txs...)
-				zkContext = append(zkContext, zkConfig...)
 			}
-			return node.DeliverBlock(txs, l2Config, zkConfig, validators, blsSignatures)
+			return node.CommitBatch(currentBlockBytes, currentTxs, blsDatas)
 		})
-	tendermint, err := NewTendermintNode(customNode, blsKey, func(config *config.Config) {
-		config.Consensus.BatchBlocksInterval = 3
-	})
+
+	tendermint, err := NewTendermintNode(customNode, blsKey)
 	require.NoError(t, err)
 	require.NoError(t, tendermint.Start())
 	defer func() {
@@ -145,118 +147,50 @@ Loop:
 
 func TestSingleTendermint_BatchPoint(t *testing.T) {
 	var (
-		configBatchBlocksInterval = 3
-		configBatchMaxBytes       = 5000
-		//configBatchTimeout      = 0 * time.Second
+		batchBlockInterval = int64(2)
+		batchMaxBytes      = int64(1000)
+		batchTimeout       = 1 * time.Second
+		batchMaxChunks     = int64(2)
 	)
-
-	t.Run("TestBlockInterval", func(t *testing.T) {
-		_, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil)
+	t.Run("TestBatchBlockInterval", func(t *testing.T) {
 		stop := make(chan struct{})
-		errChan := make(chan struct{})
-		converter := nodetypes.Version1Converter{}
-		customNode := NewCustomNode(node).WithCustomFuncDeliverBlock(func(txs [][]byte, l2Config []byte, zkConfig []byte, validators []tdm.Address, blsSignatures [][]byte) (err error) {
-			l2Data, _, err := converter.Recover(zkConfig, l2Config, txs)
-			require.NoError(t, err)
-			if l2Data.Number > 1 && (l2Data.Number-1)%uint64(configBatchBlocksInterval) == 0 {
-				if !hasSig(blsSignatures) {
-					close(errChan)
-					require.FailNow(t, fmt.Sprintf("should has signature on the block number of %d, but not found", l2Data.Number))
+		geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil, nil)
+		customNode := NewCustomNode(node).
+			WithCustomFuncDeliverBlock(func(txs [][]byte, blockMeta []byte, data l2node.ConsensusData) (*tmproto.BatchParams, [][]byte, error) {
+				nextParams, nextVal, err := node.DeliverBlock(txs, blockMeta, data)
+				require.NoError(t, err)
+				wrappedBlock := new(types.WrappedBlock)
+				err = wrappedBlock.UnmarshalBinary(blockMeta)
+				require.NoError(t, err)
+				if wrappedBlock.Number == 1 {
+					nextParams = &tmproto.BatchParams{
+						BlocksInterval: batchBlockInterval,
+					}
 				}
-			} else if hasSig(blsSignatures) {
-				close(errChan)
-				require.FailNow(t, fmt.Sprintf("signature on the wrong point, current block number: %d", l2Data.Number))
-			}
-			if (l2Data.Number-1)/uint64(configBatchBlocksInterval) == 2 { // tested 2 batch point, stop testing
-				close(stop)
-			}
-			return node.DeliverBlock(txs, l2Config, zkConfig, validators, blsSignatures)
-		})
-		tendermint, err := NewTendermintNode(customNode, nil, func(config *config.Config) {
-			config.Consensus.BatchBlocksInterval = int64(configBatchBlocksInterval)
-			config.Consensus.BatchMaxBytes = 0
-		})
-		defer func() {
-			if tendermint != nil {
-				rpctest.StopTendermint(tendermint)
-			}
-		}()
+				if wrappedBlock.Number != 1 && (wrappedBlock.Number-1)%2 == 0 {
+					require.NotNil(t, data.BatchHash, fmt.Sprintf("batchHash should not be nil at height: %d", wrappedBlock.Number))
+				} else {
+					require.Nil(t, data.BatchHash, fmt.Sprintf("batchHash should be nil at height: %d", wrappedBlock.Number))
+				}
+				if wrappedBlock.Number == 10 {
+					close(stop)
+				}
+				return nextParams, nextVal, nil
+			})
+		tendermint, err := NewDefaultTendermintNode(customNode)
 		require.NoError(t, err)
 		require.NoError(t, tendermint.Start())
+		defer func() {
+			rpctest.StopTendermint(tendermint)
+			geth.Node.Close()
+		}()
+
 		timer := time.NewTimer(10 * time.Second)
 	Loop:
 		for {
 			select {
 			case <-stop:
-				t.Log("successfully checked the batch point")
-				break Loop
-			case <-errChan:
-				t.Log("failed the testcase")
-				time.Sleep(500 * time.Millisecond)
-				break Loop
-			case <-timer.C:
-				require.Fail(t, "not reach the stop block, timeout")
-				break Loop
-			}
-		}
-	})
-
-	t.Run("TestBatchMaxBytes", func(t *testing.T) {
-		_, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil)
-		rootSize := len(common.Hash{})
-		stop := make(chan struct{})
-		errChan := make(chan struct{})
-		txsContext := make([]byte, 0)
-		zkContext := make([]byte, 0)
-		var batchNum int
-		customNode := NewCustomNode(node).WithCustomFuncDeliverBlock(func(txs [][]byte, l2Config []byte, zkConfig []byte, validators []tdm.Address, blsSignatures [][]byte) (err error) {
-			// reached 2 round batch, stop testing
-			if batchNum == 2 {
-				close(stop)
-			}
-			thisBlockTxsContext := make([]byte, 0)
-			for _, tx := range txs {
-				thisBlockTxsContext = append(thisBlockTxsContext, tx...)
-			}
-			txsContext = append(txsContext, thisBlockTxsContext...)
-			zkContext = append(zkContext, zkConfig...)
-			currentBytes := append(zkContext, txsContext...)
-			if len(currentBytes)+rootSize >= configBatchMaxBytes {
-				if !hasSig(blsSignatures) {
-					close(errChan)
-					require.FailNow(t, "no signature found when bytes reached configBatchMaxBytes")
-				}
-				// clean the context, but keep this block data, which will be calculated in next round batch size
-				txsContext = thisBlockTxsContext
-				zkContext = zkConfig
-				batchNum++
-			} else if hasSig(blsSignatures) {
-				close(errChan)
-				require.FailNow(t, "signature on the wrong point, bytes haven't reached configBatchMaxBytes")
-			}
-			return node.DeliverBlock(txs, l2Config, zkConfig, validators, blsSignatures)
-		})
-		tendermint, err := NewTendermintNode(customNode, nil, func(config *config.Config) {
-			config.Consensus.BatchMaxBytes = int64(configBatchMaxBytes)
-			config.Consensus.BatchBlocksInterval = 0
-		})
-		defer func() {
-			if tendermint != nil {
-				rpctest.StopTendermint(tendermint)
-			}
-		}()
-		require.NoError(t, err)
-		require.NoError(t, tendermint.Start())
-		timer := time.NewTimer(10 * time.Second)
-
-	Loop:
-		for {
-			select {
-			case <-stop:
-				t.Log("successfully checked the batch point")
-				break Loop
-			case <-errChan:
-				t.Log("failed the testcase")
+				t.Log("test passed")
 				break Loop
 			case <-timer.C:
 				require.Fail(t, "timeout")
@@ -265,70 +199,211 @@ func TestSingleTendermint_BatchPoint(t *testing.T) {
 		}
 	})
 
-	//t.Run("TestBatchTimeout", func(t *testing.T) {
-	//	_, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil)
-	//	stop := make(chan struct{})
-	//	errChan := make(chan struct{})
-	//	converter := nodetypes.Version1Converter{}
-	//	var startTime time.Time
-	//	var batchNum int
-	//	customNode := NewCustomNode(node).WithCustomFuncDeliverBlock(func(txs [][]byte, l2Config []byte, zkConfig []byte, validators []tdm.Address, blsSignatures [][]byte) (err error) {
-	//		if batchNum == 2 {
-	//			close(stop)
-	//		}
-	//		l2Data, _, err := converter.Recover(zkConfig, l2Config, txs)
-	//		currentBlockTime := time.Unix(int64(l2Data.Timestamp), 0)
-	//		if l2Data.Number == 1 {
-	//			startTime = currentBlockTime
-	//		} else {
-	//			if currentBlockTime.Sub(startTime) >= configBatchTimeout {
-	//				if !hasSig(blsSignatures) {
-	//					close(errChan)
-	//					require.FailNow(t, "no signature found when reached configBatchTimeout")
-	//				}
-	//				startTime = currentBlockTime
-	//				batchNum++
-	//			} else if hasSig(blsSignatures) {
-	//				close(errChan)
-	//				require.FailNow(t, "signature on the wrong point, haven't reached configBatchTimeout", "current block number: %d", l2Data.Number)
-	//			}
-	//		}
-	//		return node.DeliverBlock(txs, l2Config, zkConfig, validators, blsSignatures)
-	//	})
-	//	tendermint, err := NewTendermintNode(customNode, nil, func(config *config.Config) {
-	//		config.Consensus.BatchTimeout = configBatchTimeout
-	//		genDoc, err := tdm.GenesisDocFromFile(config.GenesisFile())
-	//		require.NoError(t, err)
-	//		genDoc.GenesisTime = time.Now()
-	//		require.NoError(t, genDoc.SaveAs(config.GenesisFile()))
-	//	})
-	//	defer func() {
-	//		if tendermint != nil {
-	//			rpctest.StopTendermint(tendermint)
-	//		}
-	//	}()
-	//	require.NoError(t, err)
-	//	require.NoError(t, tendermint.Start())
-	//	timer := time.NewTimer(10 * time.Second)
-	//Loop:
-	//	for {
-	//		select {
-	//		case <-stop:
-	//			t.Log("successfully checked the batch point")
-	//			break Loop
-	//		case <-errChan:
-	//			t.Log("failed the testcase")
-	//			break Loop
-	//		case <-timer.C:
-	//			require.Fail(t, "timeout")
-	//			break Loop
-	//		}
-	//	}
-	//})
-}
+	t.Run("TestBatchMaxBytes", func(t *testing.T) {
+		var (
+			shouldCommitBatch  bool
+			stop               = make(chan struct{})
+			committedIndex     int
+			committedIndexChan = make(chan int)
+		)
+		geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil, nil)
+		rollup, err := bindings.NewRollup(common.BigToAddress(big.NewInt(100)), geth.EthClient)
+		transactOpts, err := bind.NewKeyedTransactorWithChainID(testingPrivKey, geth.Backend.BlockChain().Config().ChainID)
+		require.NoError(t, err)
+		transactOpts.NoSend = true
+		transactOpts.GasLimit = 100000000
 
-func hasSig(blsSignatures [][]byte) bool {
-	return len(blsSignatures) > 0 && len(blsSignatures[0]) > 0
+		customNode := NewCustomNode(node).
+			WithCustomFuncDeliverBlock(func(txs [][]byte, blockMeta []byte, data l2node.ConsensusData) (*tmproto.BatchParams, [][]byte, error) {
+				nextParams, nextVal, err := node.DeliverBlock(txs, blockMeta, data)
+				require.NoError(t, err)
+				wrappedBlock := new(types.WrappedBlock)
+				err = wrappedBlock.UnmarshalBinary(blockMeta)
+				require.NoError(t, err)
+				if wrappedBlock.Number == 1 {
+					nextParams = &tmproto.BatchParams{
+						MaxBytes: batchMaxBytes,
+					}
+				}
+				return nextParams, nextVal, nil
+			}).
+			WithCustomCalculateCapWithPb(func(proposalBlockBytes []byte, proposalTxs tdm.Txs, get l2node.GetFromBatchStartFunc) (batchSize int64, chunkNum int64, err error) {
+				batchSize, chunkNum, err = node.CalculateCapWithProposalBlock(proposalBlockBytes, proposalTxs, get)
+				require.NoError(t, err)
+				if batchSize > batchMaxBytes {
+					shouldCommitBatch = true
+				}
+				return batchSize, chunkNum, nil
+			}).
+			WithCustomCommitBatch(func(currentBlockBytes []byte, currentTxs tdm.Txs, blsDatas []l2node.BlsData) error {
+				if !shouldCommitBatch {
+					require.FailNow(t, "should not commit batch now")
+				}
+				err := node.CommitBatch(currentBlockBytes, currentTxs, blsDatas)
+				require.NoError(t, err)
+				committedIndex++
+				committedIndexChan <- committedIndex
+				if committedIndex == 5 {
+					close(stop)
+				}
+				return nil
+			})
+		tendermint, err := NewDefaultTendermintNode(customNode)
+		require.NoError(t, err)
+		require.NoError(t, tendermint.Start())
+		defer func() {
+			rpctest.StopTendermint(tendermint)
+			geth.Node.Close()
+		}()
+
+		timer := time.NewTimer(10 * time.Second)
+	Loop:
+		for {
+			select {
+			case <-stop:
+				t.Log("test passed")
+				break Loop
+			case index := <-committedIndexChan:
+				batch, err := geth.GetBatch(uint64(index))
+				require.NoError(t, err)
+				require.NotNil(t, batch)
+				require.Greater(t, len(batch.Chunks), 0)
+
+				var chunks [][]byte
+				var chunkSize int
+				for _, c := range batch.Chunks {
+					chunks = append(chunks, c)
+					chunkSize += len(c)
+				}
+				size := 97 + len(batch.ParentBatchHeader) + chunkSize + len(batch.SkippedL1MessageBitmap)
+				require.True(t, batchMaxBytes >= int64(size))
+				t.Log(fmt.Sprintf("======>index: %d, size: %d \n", index, size))
+
+				tx, err := rollup.CommitBatch(transactOpts, bindings.IRollupBatchData{
+					Version:                uint8(batch.Version),
+					ParentBatchHeader:      batch.ParentBatchHeader,
+					Chunks:                 chunks,
+					SkippedL1MessageBitmap: batch.SkippedL1MessageBitmap,
+					PrevStateRoot:          batch.PrevStateRoot,
+					PostStateRoot:          batch.PostStateRoot,
+					WithdrawalRoot:         batch.WithdrawRoot,
+					Signature: bindings.IRollupBatchSignature{
+						Version:   big.NewInt(0),
+						Signers:   []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(2), big.NewInt(3)},
+						Signature: rand.Bytes(256),
+					},
+				})
+				require.NoError(t, err)
+				txBytes, err := tx.MarshalBinary()
+				require.NoError(t, err)
+				t.Log(fmt.Sprintf("======>index: %d, txBytes:%d \n", index, len(txBytes)))
+				bufferLength := len(txBytes) - size
+				require.True(t, bufferLength < 2048, "buffer length should less than 2K")
+			case <-timer.C:
+				require.Fail(t, "timeout")
+				break Loop
+			}
+		}
+	})
+
+	t.Run("TestBatchTimeout", func(t *testing.T) {
+		var batchCount int
+		geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil, nil)
+		customNode := NewCustomNode(node).
+			WithCustomFuncDeliverBlock(func(txs [][]byte, blockMeta []byte, data l2node.ConsensusData) (*tmproto.BatchParams, [][]byte, error) {
+				nextParams, nextVal, err := node.DeliverBlock(txs, blockMeta, data)
+				require.NoError(t, err)
+				wrappedBlock := new(types.WrappedBlock)
+				err = wrappedBlock.UnmarshalBinary(blockMeta)
+				require.NoError(t, err)
+				if wrappedBlock.Number == 1 {
+					nextParams = &tmproto.BatchParams{
+						Timeout: batchTimeout,
+					}
+				}
+
+				if len(data.BatchHash) > 0 {
+					batchCount++
+				}
+				return nextParams, nextVal, nil
+			})
+		tendermint, err := NewDefaultTendermintNode(customNode)
+		require.NoError(t, err)
+		require.NoError(t, tendermint.Start())
+		defer func() {
+			rpctest.StopTendermint(tendermint)
+			geth.Node.Close()
+		}()
+
+		timer := time.NewTimer(3*batchTimeout + 1*time.Second)
+	Loop:
+		for {
+			select {
+			case <-timer.C:
+				require.True(t, batchCount >= 3, "do not have enough count during this period")
+				break Loop
+			}
+		}
+	})
+
+	t.Run("TestBatchMaxChunks", func(t *testing.T) {
+		stop := make(chan struct{})
+		geth, node := NewGethAndNode(t, db.NewMemoryStore(), nil, nil, nil)
+		customNode := NewCustomNode(node).
+			WithCustomRequestBlockData(func(height int64) (txs [][]byte, blockMeta []byte, collectedL1Msgs bool, err error) {
+				txs, blockMeta, collectedL1Msgs, err = node.RequestBlockData(height)
+				require.NoError(t, err)
+				wrappedBlock := new(types.WrappedBlock)
+				err = wrappedBlock.UnmarshalBinary(blockMeta)
+				require.NoError(t, err)
+				// set rowConsumption to make 2 blocks into a chunk
+				wrappedBlock.RowConsumption = eth.RowConsumption{eth.SubCircuitRowUsage{Name: "a", RowNumber: 500_000}}
+				blockMeta, err = wrappedBlock.MarshalBinary()
+				require.NoError(t, err)
+				return
+			}).
+			WithCustomFuncDeliverBlock(func(txs [][]byte, blockMeta []byte, data l2node.ConsensusData) (*tmproto.BatchParams, [][]byte, error) {
+				nextParams, nextVal, err := node.DeliverBlock(txs, blockMeta, data)
+				require.NoError(t, err)
+				wrappedBlock := new(types.WrappedBlock)
+				err = wrappedBlock.UnmarshalBinary(blockMeta)
+				require.NoError(t, err)
+				if wrappedBlock.Number == 1 {
+					nextParams = &tmproto.BatchParams{
+						MaxChunks: batchMaxChunks,
+					}
+				}
+				if wrappedBlock.Number != 1 && int64(wrappedBlock.Number-1)%(batchMaxChunks*2) == 0 {
+					require.NotNil(t, data.BatchHash, fmt.Sprintf("batchHash should not be nil at height: %d", wrappedBlock.Number))
+				} else {
+					require.Nil(t, data.BatchHash, fmt.Sprintf("batchHash should be nil at height: %d", wrappedBlock.Number))
+				}
+				if wrappedBlock.Number == uint64(batchMaxChunks*2*3+1) {
+					close(stop)
+				}
+				return nextParams, nextVal, nil
+			})
+		tendermint, err := NewDefaultTendermintNode(customNode)
+		require.NoError(t, err)
+		require.NoError(t, tendermint.Start())
+		defer func() {
+			rpctest.StopTendermint(tendermint)
+			geth.Node.Close()
+		}()
+
+		timer := time.NewTimer(10 * time.Second)
+	Loop:
+		for {
+			select {
+			case <-stop:
+				t.Log("test passed")
+				break Loop
+			case <-timer.C:
+				require.Fail(t, "timeout")
+				break Loop
+			}
+		}
+	})
 }
 
 /******************************************************/
@@ -336,8 +411,10 @@ func hasSig(blsSignatures [][]byte) bool {
 /******************************************************/
 
 func TestMultipleTendermint_BasicProduceBlocks(t *testing.T) {
-	nodesNum := 4
-	l2Nodes, geths := NewMultipleGethNodes(t, nodesNum)
+	//nodesNum := 4
+	privKeys, pubKeys := sequencersPrivateKeys()
+
+	l2Nodes, geths := NewMultipleGethNodes(t, pubKeys)
 
 	sendValue := big.NewInt(1e18)
 	transactOpts, err := bind.NewKeyedTransactorWithChainID(testingPrivKey, geths[0].Backend.BlockChain().Config().ChainID)
@@ -350,12 +427,12 @@ func TestMultipleTendermint_BasicProduceBlocks(t *testing.T) {
 
 	// testing the transactions broadcasting
 	time.Sleep(1000 * time.Millisecond) // give the time for broadcasting
-	for i := 1; i < nodesNum; i++ {
+	for i := 1; i < len(privKeys); i++ {
 		pendings = geths[i].Backend.TxPool().Pending(true)
 		require.EqualValues(t, 1, len(pendings), "geth%d has not received this transaction", i)
 	}
 
-	tmNodes, err := NewMultipleTendermintNodes(l2Nodes)
+	tmNodes, err := NewMultipleTendermintNodes(l2Nodes, privKeys)
 	defer func() {
 		for _, tmNode := range tmNodes {
 			if tmNode != nil {
@@ -395,13 +472,17 @@ func TestMultipleTendermint_BasicProduceBlocks(t *testing.T) {
 
 func TestMultipleTendermint_AddNonSequencer(t *testing.T) {
 	nodesNum := 5
-	l2Nodes, geths := NewMultipleGethNodes(t, nodesNum)
+
+	privKeys, pubKeys := sequencersPrivateKeys()
+	_, nonPubKeys := generateTendermintKeys(nodesNum - 4)
+	pubKeys = append(pubKeys, nonPubKeys...)
+	l2Nodes, geths := NewMultipleGethNodes(t, pubKeys)
 
 	nonSeqL2Node, nonSeqGeth := l2Nodes[4], geths[4]
 	l2Nodes = l2Nodes[:4]
 
 	//timeoutCommit := time.Second
-	tmNodes, err := NewMultipleTendermintNodes(l2Nodes)
+	tmNodes, err := NewMultipleTendermintNodes(l2Nodes, privKeys)
 	defer func() {
 		for _, tmNode := range tmNodes {
 			if tmNode != nil {
@@ -454,11 +535,11 @@ func TestMultipleTendermint_AddNonSequencer(t *testing.T) {
 }
 
 func TestMultipleTendermint_NodeOffline(t *testing.T) {
-	nodesNum := 4
-	l2Nodes, geths := NewMultipleGethNodes(t, nodesNum)
+	privKeys, pubKeys := sequencersPrivateKeys()
+	l2Nodes, geths := NewMultipleGethNodes(t, pubKeys)
 
 	timeoutCommit := time.Second
-	tmNodes, err := NewMultipleTendermintNodes(l2Nodes, func(c *config.Config) {
+	tmNodes, err := NewMultipleTendermintNodes(l2Nodes, privKeys, func(c *config.Config) {
 		c.Consensus.SkipTimeoutCommit = false
 		c.Consensus.TimeoutCommit = timeoutCommit
 	})
@@ -476,7 +557,7 @@ func TestMultipleTendermint_NodeOffline(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	theAlwaysActiveGeth := geths[nodesNum-1]
+	theAlwaysActiveGeth := geths[len(pubKeys)-1]
 	startedHeight := theAlwaysActiveGeth.Backend.BlockChain().CurrentHeader().Number.Uint64()
 	time.Sleep(timeoutCommit * 3)
 	laterHeight := theAlwaysActiveGeth.Backend.BlockChain().CurrentHeader().Number.Uint64()

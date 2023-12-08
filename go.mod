@@ -1,10 +1,10 @@
-module github.com/morphism-labs/e2e
+module github.com/morph-l2/e2e
 
 go 1.20
 
 require (
-	github.com/morphism-labs/morphism-bindings v0.0.0-20230823040716-efc3bc08f84a
-	github.com/morphism-labs/node v0.0.0-20230831054114-dea259e566bb
+	github.com/morph-l2/bindings v0.0.0-20231208022223-d54807f047d2
+	github.com/morph-l2/node v0.0.0-20231208025048-0a35bd508ce9
 	github.com/prometheus/client_golang v1.16.0
 	github.com/scroll-tech/go-ethereum v1.11.4
 	github.com/stretchr/testify v1.8.2
@@ -80,7 +80,7 @@ require (
 	github.com/rs/cors v1.8.2 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sasha-s/go-deadlock v0.3.1 // indirect
-	github.com/scroll-tech/zktrie v0.5.3 // indirect
+	github.com/scroll-tech/zktrie v0.6.0 // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
 	github.com/status-im/keycard-go v0.2.0 // indirect
 	github.com/syndtr/goleveldb v1.0.1-0.20220614013038-64ee5596c38a // indirect
@@ -91,11 +91,11 @@ require (
 	github.com/tyler-smith/go-bip39 v1.1.0 // indirect
 	github.com/urfave/cli v1.22.13 // indirect
 	go.etcd.io/bbolt v1.3.6 // indirect
-	golang.org/x/crypto v0.9.0 // indirect
-	golang.org/x/net v0.10.0 // indirect
-	golang.org/x/sync v0.2.0 // indirect
-	golang.org/x/sys v0.8.0 // indirect
-	golang.org/x/text v0.9.0 // indirect
+	golang.org/x/crypto v0.14.0 // indirect
+	golang.org/x/net v0.16.0 // indirect
+	golang.org/x/sync v0.4.0 // indirect
+	golang.org/x/sys v0.13.0 // indirect
+	golang.org/x/text v0.13.0 // indirect
 	golang.org/x/time v0.1.0 // indirect
 	google.golang.org/genproto v0.0.0-20221118155620-16455021b5e6 // indirect
 	google.golang.org/grpc v1.52.0 // indirect
@@ -107,6 +107,6 @@ require (
 
 replace (
 	github.com/btcsuite/btcd => github.com/btcsuite/btcd v0.20.1-beta
-	github.com/scroll-tech/go-ethereum => github.com/morphism-labs/go-ethereum v1.10.14-0.20230828041911-f50bd5294209
-	github.com/tendermint/tendermint => github.com/morphism-labs/tendermint v0.0.0-20230821122254-064ea1cc8e02
+	github.com/scroll-tech/go-ethereum => github.com/morph-l2/go-ethereum v1.10.14-0.20231208023105-08d7b4a0bde6
+	github.com/tendermint/tendermint => github.com/morph-l2/tendermint v0.0.0-20231208041551-1a2b529f78ef
 )

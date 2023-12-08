@@ -97,3 +97,7 @@ func (geth Geth) Transfer(opts *bind.TransactOpts, to common.Address) (*types.Tr
 	opts.GasLimit = 21000
 	return bc.Transfer(opts)
 }
+
+func (geth Geth) GetBatch(index uint64) (*eth.RPCRollupBatch, error) {
+	return geth.EthClient.GetRollupBatchByIndex(context.Background(), index)
+}

@@ -2,6 +2,8 @@ package node_geth
 
 import (
 	"fmt"
+	"github.com/morph-l2/e2e/node_geth/configs"
+	"github.com/tendermint/tendermint/crypto"
 	"strings"
 	"time"
 
@@ -77,24 +79,26 @@ func NewTendermintNode(l2Node l2node.L2Node, blsKey *blssignatures.FileBLSKey, o
 	)
 }
 
-func NewMultipleTendermintNodes(l2Nodes []l2node.L2Node, opts ...TdmConfigOption) ([]*nm.Node, error) {
+func NewMultipleTendermintNodes(l2Nodes []l2node.L2Node, privKeys []crypto.PrivKey, opts ...TdmConfigOption) ([]*nm.Node, error) {
+	if len(l2Nodes) != len(privKeys) {
+		panic("l2Nodes and privKeys length should be the same")
+	}
 	// preparation for this tendermint network
 	num := len(l2Nodes)
-	privKeys := make([]ed25519.PrivKey, num)
+	//privKeys := make([]ed25519.PrivKey, num)
 	nodeKeys := make([]*p2p.NodeKey, num)
 	genVals := make([]tdm.GenesisValidator, num)
 	p2pPorts := make([]int, num)
 
 	for i := 0; i < num; i++ {
-		privKey := ed25519.GenPrivKey()
-		privKeys[i] = privKey
+		//privKey := ed25519.GenPrivKey()
+		//privKeys[i] = privKey
 		nodeKeys[i] = &p2p.NodeKey{
 			PrivKey: ed25519.GenPrivKey(),
 		}
-		privKey.PubKey()
 		genVals[i] = tdm.GenesisValidator{
-			Address: privKey.PubKey().Address(),
-			PubKey:  privKey.PubKey(),
+			Address: privKeys[i].PubKey().Address(),
+			PubKey:  privKeys[i].PubKey(),
 			Power:   1,
 			Name:    fmt.Sprintf("validator%d", i),
 		}
@@ -161,4 +165,21 @@ func NewMultipleTendermintNodes(l2Nodes []l2node.L2Node, opts ...TdmConfigOption
 
 	return tmNodes, nil
 
+}
+
+func generateTendermintKeys(num int) (privKeys []crypto.PrivKey, pubKeys []crypto.PubKey) {
+	for i := 0; i < num; i++ {
+		privKey := ed25519.GenPrivKey()
+		privKeys = append(privKeys, privKey)
+		pubKeys = append(pubKeys, privKey.PubKey())
+	}
+	return
+}
+
+func sequencersPrivateKeys() (privKeys []crypto.PrivKey, pubKeys []crypto.PubKey) {
+	for _, sequencer := range configs.Sequencers {
+		privKeys = append(privKeys, sequencer)
+		pubKeys = append(pubKeys, sequencer.PubKey())
+	}
+	return
 }

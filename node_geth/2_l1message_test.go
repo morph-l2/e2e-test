@@ -5,16 +5,16 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/morphism-labs/e2e/node_geth/configs"
-	"github.com/morphism-labs/morphism-bindings/bindings"
-	nodetypes "github.com/morphism-labs/node/core"
-	"github.com/morphism-labs/node/db"
-	"github.com/morphism-labs/node/sync"
-	"github.com/morphism-labs/node/types"
+	"github.com/morph-l2/bindings/bindings"
+	"github.com/morph-l2/e2e/node_geth/configs"
+	"github.com/morph-l2/node/db"
+	"github.com/morph-l2/node/sync"
+	"github.com/morph-l2/node/types"
 	"github.com/scroll-tech/go-ethereum/accounts/abi/bind"
 	eth "github.com/scroll-tech/go-ethereum/core/types"
 	"github.com/scroll-tech/go-ethereum/crypto"
 	"github.com/stretchr/testify/require"
+	"github.com/tendermint/tendermint/l2node"
 )
 
 func TestL1DepositMessage_ConstantBlocksWithL1Message(t *testing.T) {
@@ -23,7 +23,7 @@ func TestL1DepositMessage_ConstantBlocksWithL1Message(t *testing.T) {
 		genesis, err := GenesisFromPath(FullGenesisPath)
 		config.Genesis = genesis
 		return err
-	}, nil)
+	}, nil, nil)
 
 	beforeDepositorBalance, err := geth.EthClient.BalanceAt(context.Background(), testingAddress2, nil)
 	require.NoError(t, err)
@@ -45,21 +45,24 @@ func TestL1DepositMessage_ConstantBlocksWithL1Message(t *testing.T) {
 		require.EqualValues(t, 0, L2CrossDomainMessengerBalanceBefore.Uint64())
 
 		// block producing
-		txs, restBytes, blsBytes, root, err := node.RequestBlockData(int64(i + 1))
+		txs, blockMeta, _, err := node.RequestBlockData(int64(i + 1))
 		require.NoError(t, err)
 		require.EqualValues(t, 1, len(txs))
-		converter := nodetypes.Version1Converter{}
-		l2Data, l1Msgs, err := converter.Recover(blsBytes, restBytes, txs)
+
+		wrappedBlock := new(types.WrappedBlock)
+		err = wrappedBlock.UnmarshalBinary(blockMeta)
 		require.NoError(t, err)
-		require.EqualValues(t, 1, len(l1Msgs))
-		require.EqualValues(t, i+1, l2Data.Number)
-		require.EqualValues(t, eth.EmptyAddress, l2Data.Miner)
-		require.EqualValues(t, 1, len(l2Data.Transactions))
-		require.EqualValues(t, txBytes, l2Data.Transactions[0])
-		valid, err := node.CheckBlockData(txs, restBytes, blsBytes, root)
+
+		require.EqualValues(t, 1, len(wrappedBlock.CollectedL1Messages))
+		require.EqualValues(t, i+1, wrappedBlock.Number)
+		require.EqualValues(t, eth.EmptyAddress, wrappedBlock.Miner)
+		require.EqualValues(t, 1, len(txs))
+		require.EqualValues(t, txBytes, txs[0])
+		valid, err := node.CheckBlockData(txs, blockMeta)
 		require.NoError(t, err)
 		require.True(t, valid)
-		require.NoError(t, node.DeliverBlock(txs, restBytes, blsBytes, nil, nil))
+		_, _, err = node.DeliverBlock(txs, blockMeta, l2node.ConsensusData{})
+		require.NoError(t, err)
 
 		// after block produced
 		currentBlock := geth.Backend.BlockChain().CurrentBlock()
@@ -107,7 +110,7 @@ func TestL1DepositMessage_L1AndL2MessageInOneBlock(t *testing.T) {
 		genesis, err := GenesisFromPath(FullGenesisPath)
 		config.Genesis = genesis
 		return err
-	}, nil)
+	}, nil, nil)
 	genesisConfig := geth.Backend.BlockChain().Config()
 
 	l1Message0, _, err := MockL1Message(testingAddress2, testingAddress2, uint64(0), big.NewInt(1e18))
@@ -122,12 +125,14 @@ func TestL1DepositMessage_L1AndL2MessageInOneBlock(t *testing.T) {
 	_, err = geth.Transfer(transactOpts, testingAddress2)
 	require.NoError(t, err)
 
-	txs, restBytes, blsBytes, root, err := node.RequestBlockData(1)
+	txs, blockMeta, _, err := node.RequestBlockData(1)
 	require.NoError(t, err)
-	valid, err := node.CheckBlockData(txs, restBytes, blsBytes, root)
+	valid, err := node.CheckBlockData(txs, blockMeta)
 	require.NoError(t, err)
 	require.True(t, valid)
-	require.NoError(t, node.DeliverBlock(txs, restBytes, blsBytes, nil, nil))
+
+	_, _, err = node.DeliverBlock(txs, blockMeta, l2node.ConsensusData{})
+	require.NoError(t, err)
 
 	currentBlock := geth.Backend.BlockChain().CurrentBlock()
 	require.EqualValues(t, 1, currentBlock.Number().Uint64())
@@ -140,7 +145,7 @@ func TestL1DepositMessage_L1AndL2MessageInOneBlock(t *testing.T) {
 
 func TestL1DepositMessage_InvalidL1MessageOrder(t *testing.T) {
 	syncerDB := db.NewMemoryStore()
-	_, node := NewGethAndNode(t, syncerDB, nil, nil)
+	_, node := NewGethAndNode(t, syncerDB, nil, nil, nil)
 
 	l1Message0, _, err := MockL1Message(testingAddress2, testingAddress2, uint64(0), big.NewInt(1e18))
 	require.NoError(t, err)
@@ -148,7 +153,7 @@ func TestL1DepositMessage_InvalidL1MessageOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, syncerDB.WriteSyncedL1Messages([]types.L1Message{*l1Message0, *l1Message2}, 0))
 
-	_, _, _, _, err = node.RequestBlockData(1)
+	_, _, _, err = node.RequestBlockData(1)
 	require.ErrorIs(t, err, types.ErrInvalidL1MessageOrder)
 }
 
@@ -158,7 +163,7 @@ func TestL1DepositMessage_RetryFailure(t *testing.T) {
 		genesis, err := GenesisFromPath(FullGenesisPath)
 		config.Genesis = genesis
 		return err
-	}, nil)
+	}, nil, nil)
 	genesisConfig := geth.Backend.BlockChain().Config()
 
 	// mock a message that will be failed
